@@ -10,7 +10,7 @@ import time
 import pytest
 import websockets
 
-NUM_REQUESTS = 10
+NUM_REQUESTS = 50
 TEST_PORT = 5102
 HOST = "127.0.0.1"
 MAX_STARTUP_SECONDS = 5.0
