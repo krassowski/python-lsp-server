@@ -28,7 +28,10 @@ def ws_server_subprocess():
         HOST,
         "--port",
         str(TEST_PORT),
-        "-vv",
+        # TODO: enabling verbose logging while stderr is piped
+        # makes this crash; I believe I saw this in a
+        # deployment too.
+        # "-vv",
     ]
 
     proc = subprocess.Popen(
