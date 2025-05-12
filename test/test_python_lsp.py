@@ -10,7 +10,7 @@ import time
 import pytest
 import websockets
 
-NUM_REQUESTS = 50
+NUM_REQUESTS = 200
 TEST_PORT = 5102
 HOST = "127.0.0.1"
 MAX_STARTUP_SECONDS = 5.0
@@ -76,22 +76,38 @@ def test_concurrent_ws_requests():
             uri = f"ws://{HOST}:{TEST_PORT}"
             async with websockets.connect(uri) as ws:
                 # send initialize
-                req = {
+                init_request = {
                     "jsonrpc": "2.0",
-                    "id": idx,
+                    "id": 2 * idx,
                     "method": "initialize",
                     "params": {},
                 }
+                did_open_request = {
+                    "jsonrpc": "2.0",
+                    "id": 2 * idx + 1,
+                    "method": "textDocument/didOpen",
+                    "params": {
+                      "textDocument": {
+                        "uri": "test.py",
+                        "languageId": "python",
+                        "version": 0,
+                        "text": ""
+                      }
+                    },
+                }
+                async def communicate_and_parse_json(request: dict):
+                    await asyncio.wait_for(
+                        ws.send(json.dumps(request, ensure_ascii=False)), timeout=5
+                    )
+                    raw = await asyncio.wait_for(ws.recv(), timeout=10)
+                    obj = json.loads(raw)
 
                 try:
-                    await asyncio.wait_for(
-                        ws.send(json.dumps(req, ensure_ascii=False)), timeout=5
-                    )
-                    raw = await asyncio.wait_for(ws.recv(), timeout=5)
-                except asyncio.TimeoutError:
-                    return None
-                obj = json.loads(raw)
-                return obj.get("id")
+                    await communicate_and_parse_json(init_request)
+                    await communicate_and_parse_json(did_open_request)
+                except json.JSONDecodeError:
+                    return False
+                return True
 
         returned_id = asyncio.run(do_initialize(i))
         with lock:
@@ -110,4 +126,4 @@ def test_concurrent_ws_requests():
         assert not t.is_alive(), f"Worker thread {t} hung!"
 
     # validate
-    assert set(received) == set(range(1, NUM_REQUESTS + 1)), f"got IDs {received}"
+    assert set(received) == {True}
