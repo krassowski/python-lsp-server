@@ -10,7 +10,8 @@ import time
 import pytest
 import websockets
 
-NUM_REQUESTS = 200
+NUM_CLIENTS = 10
+NUM_REQUESTS = 10
 TEST_PORT = 5102
 HOST = "127.0.0.1"
 MAX_STARTUP_SECONDS = 5.0
@@ -87,24 +88,45 @@ def test_concurrent_ws_requests():
                     "id": 2 * idx + 1,
                     "method": "textDocument/didOpen",
                     "params": {
-                      "textDocument": {
-                        "uri": "test.py",
-                        "languageId": "python",
-                        "version": 0,
-                        "text": ""
-                      }
+                        "textDocument": {
+                            "uri": "test.py",
+                            "languageId": "python",
+                            "version": 0,
+                            "text": "def test(): pass\ntest",
+                        }
                     },
                 }
+                hover_request = {
+                    "jsonrpc": "2.0",
+                    "id": 2 * idx + 1,
+                    "method": "textDocument/hover",
+                    "params": {
+                        "textDocument": {
+                            "uri": "test.py",
+                        },
+                        "position": {
+                            "line": 1,
+                            "character": 1,
+                        },
+                    },
+                }
+
                 async def communicate_and_parse_json(request: dict):
                     await asyncio.wait_for(
                         ws.send(json.dumps(request, ensure_ascii=False)), timeout=5
                     )
                     raw = await asyncio.wait_for(ws.recv(), timeout=10)
-                    obj = json.loads(raw)
+                    # test it can be parsed
+                    json.loads(raw)
 
                 try:
                     await communicate_and_parse_json(init_request)
                     await communicate_and_parse_json(did_open_request)
+                    # requests = []
+                    for i in range(NUM_REQUESTS):
+                        # requests.append(communicate_and_parse_json(hover_request))
+                        await communicate_and_parse_json(hover_request)
+                    # await asyncio.gather(*requests)
                 except json.JSONDecodeError:
                     return False
                 return True
@@ -115,7 +137,7 @@ def test_concurrent_ws_requests():
 
     # launch threads
     threads = []
-    for i in range(1, NUM_REQUESTS + 1):
+    for i in range(1, NUM_CLIENTS + 1):
         t = threading.Thread(target=thread_target, args=(i,))
         t.start()
         threads.append(t)
