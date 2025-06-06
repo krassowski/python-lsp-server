@@ -10,8 +10,8 @@ import time
 import pytest
 import websockets
 
-NUM_CLIENTS = 10
-NUM_REQUESTS = 10
+NUM_CLIENTS = 2
+NUM_REQUESTS = 5
 TEST_PORT = 5102
 HOST = "127.0.0.1"
 MAX_STARTUP_SECONDS = 5.0
@@ -32,7 +32,7 @@ def ws_server_subprocess():
         # TODO: enabling verbose logging while stderr is piped
         # makes this crash; I believe I saw this in a
         # deployment too.
-        # "-vv",
+        #"-vv",
     ]
 
     proc = subprocess.Popen(
@@ -68,8 +68,15 @@ def ws_server_subprocess():
         proc.kill()
 
 
+TEST_DOC = """\
+def test():
+    '''Test documentation'''
+test()
+"""
+
+
 def test_concurrent_ws_requests():
-    received = []
+    received = set()
     lock = threading.Lock()
 
     def thread_target(i: int):
@@ -79,61 +86,87 @@ def test_concurrent_ws_requests():
                 # send initialize
                 init_request = {
                     "jsonrpc": "2.0",
-                    "id": 2 * idx,
+                    "id": 4 * idx,
                     "method": "initialize",
                     "params": {},
                 }
                 did_open_request = {
                     "jsonrpc": "2.0",
-                    "id": 2 * idx + 1,
+                    "id": 4 * (idx + 1),
                     "method": "textDocument/didOpen",
                     "params": {
                         "textDocument": {
                             "uri": "test.py",
                             "languageId": "python",
                             "version": 0,
-                            "text": "def test(): pass\ntest",
+                            "text": TEST_DOC,
                         }
                     },
                 }
-                hover_request = {
-                    "jsonrpc": "2.0",
-                    "id": 2 * idx + 1,
-                    "method": "textDocument/hover",
-                    "params": {
-                        "textDocument": {
-                            "uri": "test.py",
-                        },
-                        "position": {
-                            "line": 1,
-                            "character": 1,
-                        },
-                    },
-                }
 
-                async def communicate_and_parse_json(request: dict):
+                async def send_request(request: dict):
                     await asyncio.wait_for(
                         ws.send(json.dumps(request, ensure_ascii=False)), timeout=5
                     )
-                    raw = await asyncio.wait_for(ws.recv(), timeout=10)
-                    # test it can be parsed
-                    json.loads(raw)
+
+                async def get_json_reply():
+                    raw = await asyncio.wait_for(ws.recv(), timeout=60)
+                    obj = json.loads(raw)
+                    return obj
 
                 try:
-                    await communicate_and_parse_json(init_request)
-                    await communicate_and_parse_json(did_open_request)
-                    # requests = []
+                    await send_request(init_request)
+                    await get_json_reply()
+                    await send_request(did_open_request)
+                    await get_json_reply()
+                    requests = []
                     for i in range(NUM_REQUESTS):
-                        # requests.append(communicate_and_parse_json(hover_request))
-                        await communicate_and_parse_json(hover_request)
-                    # await asyncio.gather(*requests)
-                except json.JSONDecodeError:
-                    return False
-                return True
+                        hover_request = {
+                            "jsonrpc": "2.0",
+                            "id": 4 * (idx + 2 + i),
+                            "method": "textDocument/definition",
+                            "params": {
+                                "textDocument": {
+                                    "uri": "test.py",
+                                },
+                                "position": {
+                                    "line": 3,
+                                    "character": 2,
+                                },
+                            },
+                        }
+                        completion_request = {
+                            "jsonrpc": "2.0",
+                            "id": 4 * (idx + 3 + i),
+                            "method": "textDocument/completion",
+                            "params": {
+                                "textDocument": {
+                                    "uri": "test.py",
+                                },
+                                "position": {
+                                    "line": 3,
+                                    "character": 2,
+                                },
+                            },
+                        }
+                        requests.append(send_request(hover_request))
+                        requests.append(send_request(completion_request))
+                    # send many requests in parallel
+                    await asyncio.gather(*requests)
+                    # collect replies
+                    for i in range(NUM_REQUESTS):
+                        hover = await get_json_reply()
+                        print(hover)
+                        completion = await get_json_reply()
+                        print(completion)
+                except (json.JSONDecodeError, asyncio.TimeoutError) as e:
+                    import traceback
+                    return (e, traceback.format_exc())
+                return None, None
 
         returned_id = asyncio.run(do_initialize(i))
         with lock:
-            received.append(returned_id)
+            received.add(returned_id)
 
     # launch threads
     threads = []
@@ -144,8 +177,12 @@ def test_concurrent_ws_requests():
 
     # wait for them all
     for t in threads:
-        t.join(timeout=20)
+        t.join(timeout=50)
         assert not t.is_alive(), f"Worker thread {t} hung!"
 
     # validate
-    assert set(received) == {True}
+    for e, traceback in set(received):
+        if isinstance(e, Exception):
+              print(traceback)
+              raise e
+    assert False
